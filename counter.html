@@ -119,6 +119,15 @@
       <input id="actSpeak" type="number" min="1" max="60" step="1" value="5" title="Speak cadence in seconds inside each cycle" />
     </div>
 
+    <!-- Work/Rest loop panel (only visible in Work/Rest loop mode) -->
+    <div id="wrPanel" class="panel" aria-label="Work/Rest loop options">
+      <label class="secondary" for="wrWork">Count to (s):</label>
+      <input id="wrWork" type="number" min="1" max="600" step="1" value="30" title="Seconds to count up before resting" />
+
+      <label class="secondary" for="wrRest">Rest (s):</label>
+      <input id="wrRest" type="number" min="1" max="600" step="1" value="5" title="Seconds to wait before restarting from 0" />
+    </div>
+
     <details>
       <summary>History</summary>
       <div class="history" id="history"></div>
@@ -160,6 +169,10 @@
     const ACT_LEN_KEY    = 'talking-timer-act-len:v1';
     const ACT_SPEAK_KEY  = 'talking-timer-act-speakEvery:v1';
 
+    // Work/Rest loop-specific
+    const WR_WORK_KEY = 'talking-timer-wr-work:v1';
+    const WR_REST_KEY = 'talking-timer-wr-rest:v1';
+
     // ====== Timing Modes ======
     const VOICE_LOOP_START = 10;
     const VOICE_LOOP_END = 0;
@@ -178,6 +191,7 @@
       countdown : { label:'Countdown (custom)', countdown:true }, // independent cadence
       actionLoop: { label:'Action loop (0..N)', actionLoop:true }, // NEW
       voiceCycle10: { label:'Voice cycle (10..0 + beep)', voiceCycle10:true },
+      workRest: { label:'Work/Rest loop (30s + 5s rest)', workRest:true },
     };
 
     // ====== Speech / Voices ======
@@ -442,6 +456,22 @@
       localStorage.setItem(ACT_SPEAK_KEY, String(speakEvery));
     }
 
+    // Work/Rest loop helpers
+    function isWorkRest() { return !!(MODES[mode] && MODES[mode].workRest); }
+    function readWrConfigFromUI() {
+      const workLen = clamp(parseInt($('wrWork').value,10)||30, 1, 600);
+      const restLen = clamp(parseInt($('wrRest').value,10)||5, 1, 600);
+      return { workLen, restLen };
+    }
+    function loadWrDefaults() {
+      $('wrWork').value = String(clamp(parseInt(localStorage.getItem(WR_WORK_KEY),10)||30, 1, 600));
+      $('wrRest').value = String(clamp(parseInt(localStorage.getItem(WR_REST_KEY),10)||5, 1, 600));
+    }
+    function persistWrConfig({workLen,restLen}) {
+      localStorage.setItem(WR_WORK_KEY, String(workLen));
+      localStorage.setItem(WR_REST_KEY, String(restLen));
+    }
+
     function isCountdown() { return !!(MODES[mode] && MODES[mode].countdown); }
 
     function secondsElapsed() {
@@ -464,6 +494,11 @@
         const step = voiceCycleStep();
         if (step < VOICE_LOOP_COUNT_SPAN) return VOICE_LOOP_START - step; // 10..0
         return VOICE_LOOP_END; // pause on 0
+      }
+      if (isWorkRest()) {
+        const { workLen, restLen } = readWrConfigFromUI();
+        const step = secondsElapsed() % (workLen + restLen);
+        return step < workLen ? step : 0; // 0..workLen-1 counting, then hold at 0 while resting
       }
       return secondsElapsed();
     }
@@ -530,6 +565,15 @@
         if (inCountPhase) trySpeak(display);
         if (display === VOICE_LOOP_END) beep();
 
+      } else if (isWorkRest()) {
+        const { workLen, restLen } = readWrConfigFromUI();
+        const step = secondsElapsed() % (workLen + restLen);
+        const resting = step >= workLen;
+        $('taskLine').textContent = resting ? 'Resting…' : (currentTaskName ? `Task: ${currentTaskName}` : '');
+        if (step === 0) { trySpeak('go'); beep(); }
+        else if (step === workLen) { trySpeak('rest'); beep(); }
+        else beep();
+
       } else {
         const cfg = MODES[mode] || MODES.every1;
         const announce = willSpeakThisSecond_countup(cfg, display);
@@ -551,8 +595,12 @@
         const act = readActConfigFromUI();
         persistActConfig(act);
       }
+      if (isWorkRest()) {
+        const wr = readWrConfigFromUI();
+        persistWrConfig(wr);
+      }
 
-      const name = prompt('Task name?', currentTaskName || (isCountdown() ? 'Countdown' : isActionLoop() ? 'Action loop' : 'Focus block'));
+      const name = prompt('Task name?', currentTaskName || (isCountdown() ? 'Countdown' : isActionLoop() ? 'Action loop' : isWorkRest() ? 'Work/Rest loop' : 'Focus block'));
       if (!name || !name.trim()) return;
       currentTaskName = name.trim();
 
@@ -579,6 +627,8 @@
         // if (0 % act.speakEvery === 0) trySpeak(0);
       } else if (isVoiceCycle10()) {
         trySpeak(VOICE_LOOP_START);
+      } else if (isWorkRest()) {
+        trySpeak('go');
       } else {
         const cfg = MODES[mode] || MODES.every1;
         if (lastWhole % (cfg.speakEvery||1) === 0) trySpeak(lastWhole);
@@ -636,8 +686,12 @@
       if (isVoiceCycle10()) {
         note = ` (voice cycle ${VOICE_LOOP_START}..${VOICE_LOOP_END})`;
       }
+      if (isWorkRest()) {
+        const { workLen, restLen } = readWrConfigFromUI();
+        note = ` (work/rest loop ${workLen}s + ${restLen}s rest)`;
+      }
 
-      const taskName = currentTaskName || (isCountdown() ? 'Countdown' : isActionLoop() ? 'Action loop' : isVoiceCycle10() ? 'Voice cycle 10..0' : 'Untitled task');
+      const taskName = currentTaskName || (isCountdown() ? 'Countdown' : isActionLoop() ? 'Action loop' : isVoiceCycle10() ? 'Voice cycle 10..0' : isWorkRest() ? 'Work/Rest loop' : 'Untitled task');
 
       const item = { id: crypto.randomUUID(), name: taskName + note, seconds: savedSeconds, savedAt: new Date().toISOString() };
       const list = getHistory(); list.unshift(item); setHistory(list); renderHistory();
@@ -682,6 +736,9 @@
         extra = `, action loop: 0..${len-1}, speak ${speakEvery}s`;
       } else if (isVoiceCycle10()) {
         extra = `, voice cycle: ${VOICE_LOOP_START}..${VOICE_LOOP_END}, +${VOICE_LOOP_PAUSE_SECS}s pause beeps`;
+      } else if (isWorkRest()) {
+        const { workLen, restLen } = readWrConfigFromUI();
+        extra = `, work/rest: ${workLen}s + ${restLen}s rest`;
       } else if (cfg.speakEvery) {
         extra = `, ${cfg.label}`;
       }
@@ -704,6 +761,7 @@
 
       toggleCountdownPanel();
       toggleActionPanel();
+      toggleWrPanel();
     }
 
     function toggleCountdownPanel() {
@@ -718,6 +776,13 @@
       const panel = $('actPanel');
       panel.style.display = show ? 'flex' : 'none';
       if (show) loadActDefaults();
+    }
+
+    function toggleWrPanel() {
+      const show = isWorkRest();
+      const panel = $('wrPanel');
+      panel.style.display = show ? 'flex' : 'none';
+      if (show) loadWrDefaults();
     }
 
     // Pre-start init
@@ -746,6 +811,7 @@
       localStorage.setItem(MODE_KEY, mode);
       toggleCountdownPanel();
       toggleActionPanel();
+      toggleWrPanel();
       if (running && !paused) $('status').textContent = statusText();
     });
     $('voiceSelect').addEventListener('change', (e) => {
@@ -775,6 +841,13 @@
       $(id).addEventListener('change', () => {
         const cfg = readActConfigFromUI();
         persistActConfig(cfg);
+        if (running && !paused) $('status').textContent = statusText();
+      });
+    });
+    ['wrWork','wrRest'].forEach(id => {
+      $(id).addEventListener('change', () => {
+        const cfg = readWrConfigFromUI();
+        persistWrConfig(cfg);
         if (running && !paused) $('status').textContent = statusText();
       });
     });
