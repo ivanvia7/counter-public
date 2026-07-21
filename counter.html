@@ -570,8 +570,8 @@
         const step = secondsElapsed() % (workLen + restLen);
         const resting = step >= workLen;
         $('taskLine').textContent = resting ? 'Resting…' : (currentTaskName ? `Task: ${currentTaskName}` : '');
-        if (step === 0) { trySpeak('go'); beep(); }
-        else if (step === workLen) { trySpeak('rest'); beep(); }
+        if (step === 0) { beep(); }
+        else if (step === workLen) { trySpeak('check'); beep(); }
         else beep();
 
       } else {
@@ -628,7 +628,7 @@
       } else if (isVoiceCycle10()) {
         trySpeak(VOICE_LOOP_START);
       } else if (isWorkRest()) {
-        trySpeak('go');
+        // silent start
       } else {
         const cfg = MODES[mode] || MODES.every1;
         if (lastWhole % (cfg.speakEvery||1) === 0) trySpeak(lastWhole);
